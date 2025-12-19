@@ -1,16 +1,10 @@
 import time
 
-import rospy
 import numpy as np
 
-from png_navigation.msg import NIRRTWrapperMsg
 from png_navigation.path_planning_classes.rrt_base_2d import RRTBase2D
 from png_navigation.path_planning_classes.rrt_star_2d import RRTStar2D
 from png_navigation.path_planning_classes.rrt_visualizer_2d import NRRTStarPNGVisualizer
-
-from geometry_msgs.msg import Point
-from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import String, Int32, Float64MultiArray
 
 class NRRTStarPNG2D(RRTStar2D):
     def __init__(
@@ -23,6 +17,7 @@ class NRRTStarPNG2D(RRTStar2D):
         env,
         clearance,
         pc_sample_rate,
+        node=None,
     ):
         RRTBase2D.__init__(
             self,
@@ -38,26 +33,42 @@ class NRRTStarPNG2D(RRTStar2D):
         self.pc_sample_rate = pc_sample_rate
         self.pc_neighbor_radius = self.step_len
         self.visualizer = NRRTStarPNGVisualizer(self.x_start, self.x_goal, self.env)
-        self.planning_start_end_pub = rospy.Publisher('planning_start_end', String, queue_size=10)
-        self.path_len_pub = rospy.Publisher('path_len', Float64MultiArray, queue_size=10)
-        self.time_pub = rospy.Publisher('time_record', String, queue_size=10)
-        self.neural_wrapper_pub = rospy.Publisher('wrapper_input', NIRRTWrapperMsg, queue_size=10)
-        self.tree_pub = rospy.Publisher('tree', MarkerArray, queue_size=10)
+        self.node = node
+        if node is not None:
+            from rclpy.qos import QoSProfile, ReliabilityPolicy
+            from png_navigation.msg import NIRRTWrapperMsg
+            from geometry_msgs.msg import Point
+            from visualization_msgs.msg import Marker, MarkerArray
+            from std_msgs.msg import String, Int32, Float64MultiArray
+            qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            self.planning_start_end_pub = node.create_publisher(String, 'planning_start_end', qos_profile)
+            self.path_len_pub = node.create_publisher(Float64MultiArray, 'path_len', qos_profile)
+            self.time_pub = node.create_publisher(String, 'time_record', qos_profile)
+            self.neural_wrapper_pub = node.create_publisher(NIRRTWrapperMsg, 'wrapper_input', qos_profile)
+            self.tree_pub = node.create_publisher(MarkerArray, 'tree', qos_profile)
+            node.create_subscription(Int32, 'random_timer', self.random_timer_callback, qos_profile)
+            node.create_subscription(Float64MultiArray, 'wrapper_output', self.pc_callback, qos_profile)
+            time.sleep(1)  # Wait for subscribers to be ready
+        else:
+            self.planning_start_end_pub = None
+            self.path_len_pub = None
+            self.time_pub = None
+            self.neural_wrapper_pub = None
+            self.tree_pub = None
         self.current_path = None
         self.path_point_cloud_pred = None
-        rospy.sleep(1)
-        rospy.Subscriber('random_timer', Int32, self.random_timer_callback)
-        rospy.Subscriber('wrapper_output', Float64MultiArray, self.pc_callback)
 
-    def random_timer_callback(self, data):
-        time_after_initial = data.data*0.5
-        path_len = self.get_path_len(self.current_path)
-        msg = Float64MultiArray()
-        msg.data = [time_after_initial, path_len]
-        self.path_len_pub.publish(msg)
+    def random_timer_callback(self, msg):
+        if self.path_len_pub is not None:
+            from std_msgs.msg import Float64MultiArray
+            time_after_initial = msg.data*0.5
+            path_len = self.get_path_len(self.current_path)
+            pub_msg = Float64MultiArray()
+            pub_msg.data = [time_after_initial, path_len]
+            self.path_len_pub.publish(pub_msg)
 
-    def pc_callback(self, data):
-        self.path_point_cloud_pred = np.array(data.data).reshape((-1, 2))
+    def pc_callback(self, msg):
+        self.path_point_cloud_pred = np.array(msg.data).reshape((-1, 2))
         self.visualizer.set_path_point_cloud_pred(self.path_point_cloud_pred)
 
     def reset(
@@ -96,6 +107,7 @@ class NRRTStarPNG2D(RRTStar2D):
                 marker.action = Marker.DELETE
                 tree_msg.markers.append(marker)
                 marker_id += 1
+            if self.tree_pub is not None:
             self.tree_pub.publish(tree_msg)
         
         RRTBase2D.reset_robot(
@@ -150,7 +162,8 @@ class NRRTStarPNG2D(RRTStar2D):
             marker.points.append(point2)
             tree_msg.markers.append(marker)
             marker_id += 1
-        self.tree_pub.publish(tree_msg)
+        if self.tree_pub is not None:
+            self.tree_pub.publish(tree_msg)
         return path
 
     def generate_random_node(self):
@@ -186,12 +199,14 @@ class NRRTStarPNG2D(RRTStar2D):
             self.path_point_cloud_pred = None
             self.visualizer.set_path_point_cloud_pred(self.path_point_cloud_pred)
             return
-        msg = NIRRTWrapperMsg()
-        msg.x_start = list(self.x_start)
-        msg.x_goal = list(self.x_goal)
-        msg.c_max = 0 # dummy
-        msg.c_min = 0 # dummy
-        self.neural_wrapper_pub.publish(msg)
+        if self.neural_wrapper_pub is not None:
+            from png_navigation.msg import NIRRTWrapperMsg
+            msg = NIRRTWrapperMsg()
+            msg.x_start = list(self.x_start)
+            msg.x_goal = list(self.x_goal)
+            msg.c_max = 0 # dummy
+            msg.c_min = 0 # dummy
+            self.neural_wrapper_pub.publish(msg)
 
     def planning_block_gap(
         self,
@@ -215,6 +230,7 @@ class NRRTStarPNG2D(RRTStar2D):
 def get_path_planner(
     args,
     problem,
+    node=None,
 ):
     return NRRTStarPNG2D(
         problem['x_start'],
@@ -225,4 +241,5 @@ def get_path_planner(
         problem['env'],
         args.clearance,
         args.pc_sample_rate,
+        node=node,
     )

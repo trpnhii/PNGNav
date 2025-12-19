@@ -1,18 +1,10 @@
 import time
 
-import rospy
 import numpy as np
 
 from png_navigation.path_planning_classes.rrt_base_2d import RRTBase2D
 from png_navigation.path_planning_classes.irrt_star_2d import IRRTStar2D
 from png_navigation.path_planning_classes.rrt_visualizer_2d import NIRRTStarVisualizer
-
-from geometry_msgs.msg import Point
-from visualization_msgs.msg import Marker, MarkerArray
-from std_msgs.msg import String, Int32, Float64MultiArray
-
-from png_navigation.msg import NIRRTWrapperMsg
-
 
 class NIRRTStarPNG2D(IRRTStar2D):
     def __init__(
@@ -26,6 +18,7 @@ class NIRRTStarPNG2D(IRRTStar2D):
         clearance,
         pc_sample_rate,
         pc_update_cost_ratio,
+        node=None,
     ):
         RRTBase2D.__init__(
             self,
@@ -46,30 +39,44 @@ class NIRRTStarPNG2D(IRRTStar2D):
         
         self.path_solutions = [] # * a list of valid goal parent vertex indices
         self.visualizer = NIRRTStarVisualizer(self.x_start, self.x_goal, self.env)
-
-        self.planning_start_end_pub = rospy.Publisher('planning_start_end', String, queue_size=10)
-        self.path_len_pub = rospy.Publisher('path_len', Float64MultiArray, queue_size=10)
-        self.neural_wrapper_pub = rospy.Publisher('wrapper_input', NIRRTWrapperMsg, queue_size=10)
-        self.time_pub = rospy.Publisher('time_record', String, queue_size=10)
-
-        self.tree_pub = rospy.Publisher('tree', MarkerArray, queue_size=10)
+        self.node = node
+        if node is not None:
+            from rclpy.qos import QoSProfile, ReliabilityPolicy
+            from png_navigation.msg import NIRRTWrapperMsg
+            from geometry_msgs.msg import Point
+            from visualization_msgs.msg import Marker, MarkerArray
+            from std_msgs.msg import String, Int32, Float64MultiArray
+            qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            self.planning_start_end_pub = node.create_publisher(String, 'planning_start_end', qos_profile)
+            self.path_len_pub = node.create_publisher(Float64MultiArray, 'path_len', qos_profile)
+            self.neural_wrapper_pub = node.create_publisher(NIRRTWrapperMsg, 'wrapper_input', qos_profile)
+            self.time_pub = node.create_publisher(String, 'time_record', qos_profile)
+            self.tree_pub = node.create_publisher(MarkerArray, 'tree', qos_profile)
+            node.create_subscription(Int32, 'random_timer', self.random_timer_callback, qos_profile)
+            node.create_subscription(Float64MultiArray, 'wrapper_output', self.pc_callback, qos_profile)
+            time.sleep(1)  # Wait for subscribers to be ready
+        else:
+            self.planning_start_end_pub = None
+            self.path_len_pub = None
+            self.neural_wrapper_pub = None
+            self.time_pub = None
+            self.tree_pub = None
 
         self.current_path_len = np.inf
         self.path_point_cloud_pred = None
         self.cmax = np.inf
         self.cmin = 0.  # invalid
-        rospy.sleep(1)
-        rospy.Subscriber('random_timer', Int32, self.random_timer_callback)
-        rospy.Subscriber('wrapper_output', Float64MultiArray, self.pc_callback)
 
-    def random_timer_callback(self, data):
-        time_after_initial = data.data*0.5
-        msg = Float64MultiArray()
-        msg.data = [time_after_initial, self.current_path_len]
-        self.path_len_pub.publish(msg)
+    def random_timer_callback(self, msg):
+        if self.path_len_pub is not None:
+            from std_msgs.msg import Float64MultiArray
+            time_after_initial = msg.data*0.5
+            pub_msg = Float64MultiArray()
+            pub_msg.data = [time_after_initial, self.current_path_len]
+            self.path_len_pub.publish(pub_msg)
 
-    def pc_callback(self, data):
-        self.path_point_cloud_pred = np.array(data.data).reshape((-1, 2)) # (n, 2)
+    def pc_callback(self, msg):
+        self.path_point_cloud_pred = np.array(msg.data).reshape((-1, 2)) # (n, 2)
         if self.cmax < np.inf:
             in_flag = np.linalg.norm(self.path_point_cloud_pred-self.x_start, axis=1)+\
                 np.linalg.norm(self.path_point_cloud_pred-self.x_goal, axis=1)<self.cmax # (n)
@@ -116,7 +123,8 @@ class NIRRTStarPNG2D(IRRTStar2D):
                 marker.action = Marker.DELETE
                 tree_msg.markers.append(marker)
                 marker_id += 1
-            self.tree_pub.publish(tree_msg)
+            if self.tree_pub is not None:
+                self.tree_pub.publish(tree_msg)
         
         RRTBase2D.reset_robot(
             self,
@@ -264,9 +272,10 @@ class NIRRTStarPNG2D(IRRTStar2D):
             point2.z = 0
             marker.points.append(point1)
             marker.points.append(point2)
-            tree_msg.markers.append(marker)
-            marker_id += 1
-        self.tree_pub.publish(tree_msg)
+                tree_msg.markers.append(marker)
+                marker_id += 1
+            if self.tree_pub is not None:
+                self.tree_pub.publish(tree_msg)
         
         return self.path
 
@@ -328,12 +337,14 @@ class NIRRTStarPNG2D(IRRTStar2D):
             self.path_point_cloud_pred = None
             self.visualizer.set_path_point_cloud_pred(self.path_point_cloud_pred)
             return
-        msg = NIRRTWrapperMsg()
-        msg.x_start = list(self.x_start)
-        msg.x_goal = list(self.x_goal)
-        msg.c_max = cmax
-        msg.c_min = cmin
-        self.neural_wrapper_pub.publish(msg)
+        if self.neural_wrapper_pub is not None:
+            from png_navigation.msg import NIRRTWrapperMsg
+            msg = NIRRTWrapperMsg()
+            msg.x_start = list(self.x_start)
+            msg.x_goal = list(self.x_goal)
+            msg.c_max = cmax
+            msg.c_min = cmin
+            self.neural_wrapper_pub.publish(msg)
 
     def visualize(self, x_center, c_best, start_goal_straightline_dist, theta, figure_title=None, img_filename=None):
         if figure_title is None:
@@ -468,7 +479,11 @@ class NIRRTStarPNG2D(IRRTStar2D):
                     self.path_solutions.append(node_new_index)
             total_iter_count += 1
             if total_iter_count % 500 == 0:
-                self.time_pub.publish("iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start))
+                if self.time_pub is not None:
+                    from std_msgs.msg import String
+                    msg = String()
+                    msg.data = "iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start)
+                    self.time_pub.publish(msg)
         path_len_list = path_len_list[1:] # * the first one is the initialized c_best before iteration
         if better_than_inf:
             initial_path_len = path_len_list[-1]
@@ -482,11 +497,20 @@ class NIRRTStarPNG2D(IRRTStar2D):
             if initial_path_len == np.inf:
                 # * fail to find initial path solution
                 # return path_len_list
-                self.planning_start_end_pub.publish("start_"+str(env_idx))
-                self.planning_start_end_pub.publish("end_"+str(env_idx))
+                if self.planning_start_end_pub is not None:
+                    from std_msgs.msg import String
+                    msg = String()
+                    msg.data = "start_"+str(env_idx)
+                    self.planning_start_end_pub.publish(msg)
+                    msg.data = "end_"+str(env_idx)
+                    self.planning_start_end_pub.publish(msg)
                 return
         self.current_path_len = initial_path_len
-        self.planning_start_end_pub.publish("start_"+str(env_idx))
+        if self.planning_start_end_pub is not None:
+            from std_msgs.msg import String
+            msg = String()
+            msg.data = "start_"+str(env_idx)
+            self.planning_start_end_pub.publish(msg)
         start_time = time.time()
         path_len_list = path_len_list[:-1] # * for loop below will add initial_path_len to path_len_list
         # * iteration after finding initial solution
@@ -523,9 +547,17 @@ class NIRRTStarPNG2D(IRRTStar2D):
             k += 1
             total_iter_count += 1
             if total_iter_count % 500 == 0:
-                self.time_pub.publish("iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start))
+                if self.time_pub is not None:
+                    from std_msgs.msg import String
+                    msg = String()
+                    msg.data = "iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start)
+                    self.time_pub.publish(msg)
 
-        self.planning_start_end_pub.publish("end_"+str(env_idx))
+        if self.planning_start_end_pub is not None:
+            from std_msgs.msg import String
+            msg = String()
+            msg.data = "end_"+str(env_idx)
+            self.planning_start_end_pub.publish(msg)
         # * path cost for the last iteration
         c_best, x_best = self.find_best_path_solution() # * there must be path solutions
         self.cmax = c_best
@@ -537,6 +569,7 @@ class NIRRTStarPNG2D(IRRTStar2D):
 def get_path_planner(
     args,
     problem,
+    node=None,
 ):
     return NIRRTStarPNG2D(
         problem['x_start'],
@@ -548,5 +581,6 @@ def get_path_planner(
         args.clearance,
         args.pc_sample_rate,
         args.pc_update_cost_ratio,
+        node=node,
     )
     

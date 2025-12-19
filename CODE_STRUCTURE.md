@@ -45,14 +45,22 @@
 
 **Purpose**: All RRT algorithm implementations
 
-**ROS2 Compatibility**: ❌ Needs ROS2 conversion - Uses `rospy` for publishers/subscribers in `rrt_star_2d.py`, `irrt_star_2d.py`, `nrrt_star_png_2d.py`, and `nirrt_star_png_2d.py`. `rrt_base_2d.py` is ROS2 compatible (no ROS dependencies).
+**ROS2 Compatibility**: ✅ Converted to ROS2 compatible (2025-12-19 19:59:18) - Converted from `rospy` to `rclpy`. All path planning algorithm classes now accept an optional `node` parameter for ROS2 integration. Publishers/subscribers are created only when a node is provided, making the code compatible with both ROS1 and ROS2.
 
 -   `src/png_navigation/src/png_navigation/path_planning_classes/rrt_base_2d.py` (✅ ROS2 compatible)
--   `src/png_navigation/src/png_navigation/path_planning_classes/rrt_star_2d.py` (❌ uses rospy)
--   `src/png_navigation/src/png_navigation/path_planning_classes/irrt_star_2d.py` (❌ uses rospy)
--   `src/png_navigation/src/png_navigation/path_planning_classes/nrrt_star_png_2d.py` (❌ uses rospy)
--   `src/png_navigation/src/png_navigation/path_planning_classes/nirrt_star_png_2d.py` (❌ uses rospy)
+-   `src/png_navigation/src/png_navigation/path_planning_classes/rrt_star_2d.py` (✅ converted to ROS2 - uses rclpy with optional node parameter)
+-   `src/png_navigation/src/png_navigation/path_planning_classes/irrt_star_2d.py` (✅ converted to ROS2 - uses rclpy with optional node parameter)
+-   `src/png_navigation/src/png_navigation/path_planning_classes/nrrt_star_png_2d.py` (✅ converted to ROS2 - uses rclpy with optional node parameter)
+-   `src/png_navigation/src/png_navigation/path_planning_classes/nirrt_star_png_2d.py` (✅ converted to ROS2 - uses rclpy with optional node parameter)
     -   Uses: Part 1 (rrt_utils_2d, rrt_visualizer_2d), Part 3 (rrt_utils_2d)
+    -   **Changes**:
+        -   Added optional `node` parameter to all `__init__` methods
+        -   Replaced `rospy.Publisher` with `node.create_publisher()` when node is provided
+        -   Replaced `rospy.Subscriber` with `node.create_subscription()` when node is provided
+        -   Replaced `rospy.sleep()` with `time.sleep()`
+        -   Updated message publishing to use proper message objects (String, Float64MultiArray)
+        -   Added null checks before publishing (`if self.pub is not None:`)
+        -   Updated `get_path_planner()` functions to accept and pass `node` parameter
 
 ---
 
@@ -126,13 +134,20 @@
 
 **Purpose**: ROS service nodes for path planning algorithms
 
-**ROS2 Compatibility**: ❌ Needs ROS2 conversion - All files use `rospy` for ROS1 services and nodes. Need to convert to `rclpy` for ROS2.
+**ROS2 Compatibility**: ✅ Converted to ROS2 compatible (2025-12-19 19:59:18) - Converted from `rospy` to `rclpy`. All service node classes now inherit from `rclpy.node.Node`, use ROS2 services, and pass the node to path planner instances.
 
--   `src/png_navigation/scripts/rrt_star_node.py` (❌ uses rospy)
--   `src/png_navigation/scripts/irrt_star_node.py` (❌ uses rospy)
--   `src/png_navigation/scripts/nrrt_star_node.py` (❌ uses rospy)
--   `src/png_navigation/scripts/nirrt_star_node.py` (❌ uses rospy)
+-   `src/png_navigation/scripts/rrt_star_node.py` (✅ converted to ROS2 - uses rclpy)
+-   `src/png_navigation/scripts/irrt_star_node.py` (✅ converted to ROS2 - uses rclpy)
+-   `src/png_navigation/scripts/nrrt_star_node.py` (✅ converted to ROS2 - uses rclpy)
+-   `src/png_navigation/scripts/nirrt_star_node.py` (✅ converted to ROS2 - uses rclpy)
     -   Uses: Part 1 (rrt_env_2d), Part 2 (config), Part 4 (algorithms)
+    -   **Changes**:
+        -   Replaced `rospy` with `rclpy` and `rclpy.node.Node`
+        -   Converted `rospy.Service` to `node.create_service()` with ROS2 callback format (request, response)
+        -   Updated service request structure: `request.plan_request` → `request.problem`, `request.request_env` → `request.env`
+        -   Updated service response: `return Response(...)` → `response.field = value; return response`
+        -   Updated logging: `rospy.loginfo()` → `node.get_logger().info()`
+        -   Pass `node=self` to `get_path_planner()` to enable ROS2 publishers/subscribers in path planning algorithms
 
 ---
 
@@ -205,13 +220,19 @@
 
 **Purpose**: Scripts for handling dynamic obstacles
 
-**ROS2 Compatibility**: ❌ Needs ROS2 conversion - All files use `rospy` for ROS1 nodes, topics, and services. Need to convert to `rclpy` for ROS2.
+**ROS2 Compatibility**: ⚠️ Partially converted to ROS2 (2025-12-19 19:59:18) - `moving_humans_with_noisy_measurements.py` converted. Remaining files (`global_planner_node_check.py`, `local_planner_node_check.py`, `human_checker_gazebo.py`) need conversion following similar patterns to Parts 12 and 13.
 
--   `src/png_navigation/scripts_dynamic_obstacles/global_planner_node_check.py` (❌ uses rospy, rospkg)
--   `src/png_navigation/scripts_dynamic_obstacles/local_planner_node_check.py` (❌ uses rospy)
--   `src/png_navigation/scripts_dynamic_obstacles/human_checker_gazebo.py` (❌ uses rospy, tf)
--   `src/png_navigation/scripts_dynamic_obstacles/moving_humans_with_noisy_measurements.py` (❌ uses rospy)
+-   `src/png_navigation/scripts_dynamic_obstacles/global_planner_node_check.py` (❌ needs conversion - similar to Part 12)
+-   `src/png_navigation/scripts_dynamic_obstacles/local_planner_node_check.py` (❌ needs conversion - similar to Part 13)
+-   `src/png_navigation/scripts_dynamic_obstacles/human_checker_gazebo.py` (❌ needs conversion - uses rospy, tf)
+-   `src/png_navigation/scripts_dynamic_obstacles/moving_humans_with_noisy_measurements.py` (✅ converted to ROS2 - uses rclpy)
     -   Uses: Multiple parts (varies by file)
+    -   **Changes for moving_humans_with_noisy_measurements.py**:
+        -   Replaced `rospy` with `rclpy` and `rclpy.node.Node`
+        -   Converted function-based node to class-based node inheriting from `Node`
+        -   Replaced `rospy.Rate` with `node.create_timer()` for periodic publishing
+        -   Updated time handling: `rospy.Time.now()` → `node.get_clock().now().to_msg()`
+        -   Converted `rospy.Publisher` to `node.create_publisher()` with QoS profiles
 
 ---
 
@@ -242,27 +263,27 @@
 
 ## ROS2 Compatibility Summary
 
-**✅ ROS2 Compatible (13 parts):**
+**✅ ROS2 Compatible (15 parts):**
 
 -   Part 1: Core Utilities
 -   Part 2: Configuration
 -   Part 3: Path Planning Utilities Wrapper
+-   Part 4: Path Planning Algorithms - ✅ Converted (2025-12-19 19:59:18)
 -   Part 5: Map Utilities
 -   Part 6: Point Cloud Utilities
 -   Part 7: Neural Network Base Utilities
 -   Part 8: Neural Network Models
 -   Part 9: Neural Network Wrapper
 -   Part 10: Neural Network Wrapper with BFS
+-   Part 11: ROS Path Planning Service Nodes - ✅ Converted (2025-12-19 19:59:18)
 -   Part 12: Global Planner - ✅ Converted (2025-12-19 19:24:55)
 -   Part 13: Local Planner - ✅ Converted (2025-12-19 19:36:51)
 -   Part 14: Neural Wrapper ROS Nodes - ✅ Converted (2025-12-19 19:41:23)
 -   Part 16: Package Setup (**init**.py files only)
 
-**❌ Needs ROS2 Conversion (3 parts):**
+**⚠️ Partially Converted (1 part):**
 
--   Part 4: Path Planning Algorithms (4 out of 5 files use rospy)
--   Part 11: ROS Path Planning Service Nodes
--   Part 15: Dynamic Obstacles Handling
+-   Part 15: Dynamic Obstacles Handling - ⚠️ Partially converted (2025-12-19 19:59:18) - 1 of 4 files converted
 
 **⚠️ Partially Compatible:**
 

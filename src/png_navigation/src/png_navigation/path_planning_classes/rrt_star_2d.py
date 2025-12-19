@@ -3,8 +3,6 @@
 import math
 import numpy as np
 
-import rospy
-from std_msgs.msg import String, Int32, Float64MultiArray
 import time
 
 from png_navigation.path_planning_classes.rrt_base_2d import RRTBase2D
@@ -20,6 +18,7 @@ class RRTStar2D(RRTBase2D):
         iter_max,
         env,
         clearance,
+        node=None,
     ):
         super().__init__(
             x_start,
@@ -32,9 +31,18 @@ class RRTStar2D(RRTBase2D):
             "RRT* 2D",
         )
         self.visualizer = RRTStarVisualizer(self.x_start, self.x_goal, self.env)
-        self.planning_start_end_pub = rospy.Publisher('planning_start_end', String, queue_size=10)
-        self.path_len_pub = rospy.Publisher('path_len', Float64MultiArray, queue_size=10)
-        self.time_pub = rospy.Publisher('time_record', String, queue_size=10)
+        self.node = node
+        if node is not None:
+            from rclpy.qos import QoSProfile, ReliabilityPolicy
+            from std_msgs.msg import String, Float64MultiArray
+            qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            self.planning_start_end_pub = node.create_publisher(String, 'planning_start_end', qos_profile)
+            self.path_len_pub = node.create_publisher(Float64MultiArray, 'path_len', qos_profile)
+            self.time_pub = node.create_publisher(String, 'time_record', qos_profile)
+        else:
+            self.planning_start_end_pub = None
+            self.path_len_pub = None
+            self.time_pub = None
         self.current_path = None
 
     def reset(
@@ -210,7 +218,11 @@ class RRTStar2D(RRTBase2D):
     ):
         if start_time is None:
             start_time = time.time()
-        self.time_pub.publish("block_gap started.")
+        if self.time_pub is not None:
+            from std_msgs.msg import String
+            msg = String()
+            msg.data = "block_gap started."
+            self.time_pub.publish(msg)
         path_len_list = []
         for k in range(self.iter_max):
             node_rand = self.generate_random_node()
@@ -295,16 +307,29 @@ class RRTStar2D(RRTBase2D):
                 break
             total_iter_count += 1
             if total_iter_count % 500 == 0:
-                self.time_pub.publish("iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start))
+                if self.time_pub is not None:
+                    from std_msgs.msg import String
+                    msg = String()
+                    msg.data = "iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start)
+                    self.time_pub.publish(msg)
         if path_len_list[-1]==np.inf:
             # * fail to find initial path solution
             # return path_len_list
-            self.planning_start_end_pub.publish("start_"+str(env_idx))
-            self.planning_start_end_pub.publish("end_"+str(env_idx))
+            if self.planning_start_end_pub is not None:
+                from std_msgs.msg import String
+                msg = String()
+                msg.data = "start_"+str(env_idx)
+                self.planning_start_end_pub.publish(msg)
+                msg.data = "end_"+str(env_idx)
+                self.planning_start_end_pub.publish(msg)
             return
 
         self.current_path = current_path
-        self.planning_start_end_pub.publish("start_"+str(env_idx))
+        if self.planning_start_end_pub is not None:
+            from std_msgs.msg import String
+            msg = String()
+            msg.data = "start_"+str(env_idx)
+            self.planning_start_end_pub.publish(msg)
         start_time = time.time()
         initial_path_len = path_len_list[-1]
         k = 0
@@ -340,8 +365,16 @@ class RRTStar2D(RRTBase2D):
             k += 1
             total_iter_count += 1
             if total_iter_count % 500 == 0:
-                self.time_pub.publish("iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start))
-        self.planning_start_end_pub.publish("end_"+str(env_idx))
+                if self.time_pub is not None:
+                    from std_msgs.msg import String
+                    msg = String()
+                    msg.data = "iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start)
+                    self.time_pub.publish(msg)
+        if self.planning_start_end_pub is not None:
+            from std_msgs.msg import String
+            msg = String()
+            msg.data = "end_"+str(env_idx)
+            self.planning_start_end_pub.publish(msg)
 
 
     def planning_robot(
@@ -390,6 +423,7 @@ def get_path_planner(
     args,
     problem,
     neural_wrapper=None,
+    node=None,
 ):
     return RRTStar2D(
         problem['x_start'],
@@ -399,4 +433,5 @@ def get_path_planner(
         args.iter_max,
         problem['env'],
         args.clearance,
+        node=node,
     )

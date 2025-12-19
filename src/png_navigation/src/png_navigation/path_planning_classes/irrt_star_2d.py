@@ -2,9 +2,7 @@ import math
 import time
 import random
 
-import rospy
 import numpy as np
-from std_msgs.msg import String, Int32, Float64MultiArray
 
 from png_navigation.path_planning_classes.rrt_base_2d import RRTBase2D
 from png_navigation.path_planning_classes.rrt_star_2d import RRTStar2D
@@ -20,6 +18,7 @@ class IRRTStar2D(RRTStar2D):
         iter_max,
         env,
         clearance,
+        node=None,
     ):
         RRTBase2D.__init__(
             self,
@@ -34,17 +33,28 @@ class IRRTStar2D(RRTStar2D):
         )
         self.path_solutions = [] # * a list of valid goal parent vertex indices
         self.visualizer = IRRTStarVisualizer(self.x_start, self.x_goal, self.env)
-        self.planning_start_end_pub = rospy.Publisher('planning_start_end', String, queue_size=10)
-        self.path_len_pub = rospy.Publisher('path_len', Float64MultiArray, queue_size=10)
-        self.time_pub = rospy.Publisher('time_record', String, queue_size=10)
+        self.node = node
+        if node is not None:
+            from rclpy.qos import QoSProfile, ReliabilityPolicy
+            from std_msgs.msg import String, Int32, Float64MultiArray
+            qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+            self.planning_start_end_pub = node.create_publisher(String, 'planning_start_end', qos_profile)
+            self.path_len_pub = node.create_publisher(Float64MultiArray, 'path_len', qos_profile)
+            self.time_pub = node.create_publisher(String, 'time_record', qos_profile)
+            node.create_subscription(Int32, 'random_timer', self.random_timer_callback, qos_profile)
+        else:
+            self.planning_start_end_pub = None
+            self.path_len_pub = None
+            self.time_pub = None
         self.current_path_len = np.inf
-        rospy.Subscriber('random_timer', Int32, self.random_timer_callback)
 
-    def random_timer_callback(self, data):
-        time_after_initial = data.data*0.5
-        msg = Float64MultiArray()
-        msg.data = [time_after_initial, self.current_path_len]
-        self.path_len_pub.publish(msg)
+    def random_timer_callback(self, msg):
+        if self.path_len_pub is not None:
+            from std_msgs.msg import Float64MultiArray
+            time_after_initial = msg.data*0.5
+            pub_msg = Float64MultiArray()
+            pub_msg.data = [time_after_initial, self.current_path_len]
+            self.path_len_pub.publish(pub_msg)
 
     def reset(
         self,
@@ -335,7 +345,11 @@ class IRRTStar2D(RRTStar2D):
                     self.path_solutions.append(node_new_index)
             total_iter_count += 1
             if total_iter_count % 500 == 0:
-                self.time_pub.publish("iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start))
+                if self.time_pub is not None:
+                    from std_msgs.msg import String
+                    msg = String()
+                    msg.data = "iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start)
+                    self.time_pub.publish(msg)
         path_len_list = path_len_list[1:] # * the first one is the initialized c_best before iteration
         if better_than_inf:
             initial_path_len = path_len_list[-1]
@@ -347,11 +361,20 @@ class IRRTStar2D(RRTStar2D):
             initial_path_len = path_len_list[-1]
             if initial_path_len == np.inf:
                 # * fail to find initial path solution
-                self.planning_start_end_pub.publish("start_"+str(env_idx))
-                self.planning_start_end_pub.publish("end_"+str(env_idx))
+                if self.planning_start_end_pub is not None:
+                    from std_msgs.msg import String
+                    msg = String()
+                    msg.data = "start_"+str(env_idx)
+                    self.planning_start_end_pub.publish(msg)
+                    msg.data = "end_"+str(env_idx)
+                    self.planning_start_end_pub.publish(msg)
                 return
         self.current_path_len = initial_path_len
-        self.planning_start_end_pub.publish("start_"+str(env_idx))
+        if self.planning_start_end_pub is not None:
+            from std_msgs.msg import String
+            msg = String()
+            msg.data = "start_"+str(env_idx)
+            self.planning_start_end_pub.publish(msg)
         start_time = time.time()
         path_len_list = path_len_list[:-1] # * for loop below will add initial_path_len to path_len_list
         # * iteration after finding initial solution
@@ -388,8 +411,16 @@ class IRRTStar2D(RRTStar2D):
             k += 1
             total_iter_count += 1
             if total_iter_count % 500 == 0:
-                self.time_pub.publish("iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start))
-        self.planning_start_end_pub.publish("end_"+str(env_idx))
+                if self.time_pub is not None:
+                    from std_msgs.msg import String
+                    msg = String()
+                    msg.data = "iteration count: {0}, time: {1}".format(total_iter_count, time.time()-total_time_start)
+                    self.time_pub.publish(msg)
+        if self.planning_start_end_pub is not None:
+            from std_msgs.msg import String
+            msg = String()
+            msg.data = "end_"+str(env_idx)
+            self.planning_start_end_pub.publish(msg)
         # # * path cost for the last iteration
         c_best, x_best = self.find_best_path_solution() # * there must be path solutions
         self.current_path_len = c_best
@@ -448,6 +479,7 @@ def get_path_planner(
     args,
     problem,
     neural_wrapper=None,
+    node=None,
 ):
     return IRRTStar2D(
         problem['x_start'],
@@ -457,4 +489,5 @@ def get_path_planner(
         args.iter_max,
         problem['env'],
         args.clearance,
+        node=node,
     )

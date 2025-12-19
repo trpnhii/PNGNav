@@ -1,7 +1,8 @@
 #!/home/zhe/miniconda3/envs/pngenv/bin/python
 import numpy as np
 
-import rospy
+import rclpy
+from rclpy.node import Node
 
 from png_navigation.configs.rrt_star_config import Config
 from png_navigation.path_planning_classes.rrt_env_2d import Env
@@ -30,62 +31,70 @@ def get_fake_problem():
     return problem
 
 
-class NIRRTStarNode:
+class NIRRTStarNode(Node):
     def __init__(
         self,
     ):
+        super().__init__('png_navigation_nirrt_star_node')
         self.config = Config()
         self.planner = get_path_planner(
             self.config.path_planner_args,
             get_fake_problem(),
+            node=self,
         )
-        rospy.Service('png_navigation/set_env_2d', SetEnv, self.set_env)
-        rospy.Service('png_navigation/get_global_plan', GetGlobalPlan, self.get_global_plan)
+        self.set_env_service = self.create_service(SetEnv, 'png_navigation/set_env_2d', self.set_env)
+        self.get_global_plan_service = self.create_service(GetGlobalPlan, 'png_navigation/get_global_plan', self.get_global_plan)
     
-    def get_global_plan(self, request):
+    def get_global_plan(self, request, response):
         self.planner.reset_robot(
-            x_start=request.plan_request.start,
-            x_goal=request.plan_request.goal,
+            x_start=request.problem.start,
+            x_goal=request.problem.goal,
             env=None,
-            search_radius=request.plan_request.search_radius,
-            max_time=request.plan_request.max_time,
+            search_radius=request.problem.search_radius,
+            max_time=request.problem.max_time,
         )
         # * clearance and max_iterations from plan_request are redundant and not used here.
         path = self.planner.planning_robot()
         if len(path) == 0:
-            is_solved = False
-            path = []
-            return GetGlobalPlanResponse(is_solved, path, request.plan_request)
+            response.is_solved = False
+            response.path = []
         else:
-            is_solved = True
-            path = path.flatten()
-            return GetGlobalPlanResponse(is_solved, path, request.plan_request)
+            response.is_solved = True
+            response.path = path.flatten().tolist()
+        return response
 
-    def set_env(self, request):
-        if len(request.request_env.circle_obstacles)>0:
-            circle_obstacles = np.array(request.request_env.circle_obstacles).reshape(-1,3)
+    def set_env(self, request, response):
+        if len(request.env.circle_obstacles)>0:
+            circle_obstacles = np.array(request.env.circle_obstacles).reshape(-1,3)
         else:
             circle_obstacles = []
-        if len(request.request_env.rectangle_obstacles)>0:
-            rectangle_obstacles = np.array(request.request_env.rectangle_obstacles).reshape(-1,4)
+        if len(request.env.rectangle_obstacles)>0:
+            rectangle_obstacles = np.array(request.env.rectangle_obstacles).reshape(-1,4)
         else:
             rectangle_obstacles = []       
         env_dict = {
-            'x_range': request.request_env.x_range,
-            'y_range': request.request_env.y_range,
+            'x_range': request.env.x_range,
+            'y_range': request.env.y_range,
             'circle_obstacles': circle_obstacles,
             'rectangle_obstacles': rectangle_obstacles,
         }
         self.planner.reset_env_robot(Env(env_dict))
-        rospy.loginfo("Environment is set.")
-        is_set = True
-        return SetEnvResponse(is_set)
+        self.get_logger().info("Environment is set.")
+        response.is_set = True
+        return response
+
+def main():
+    rclpy.init()
+    nirrtsn = NIRRTStarNode()
+    try:
+        rclpy.spin(nirrtsn)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()
+
 
 if __name__ == '__main__':
-    try:
-        rospy.init_node('png_navigation_nirrt_star_node', anonymous=True)
-        nirrtsn = NIRRTStarNode()
-        rospy.spin()
-    except rospy.ROSInterruptException:
-        pass
+    main()
 
