@@ -1,10 +1,14 @@
 #!/usr/bin/python3.8
 import math
+import time
 
-import tf
-import rospy
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 import numpy as np
-from tf.transformations import euler_from_quaternion
+import tf2_ros
+from tf2_ros import TransformException
+import tf_transformations
 
 from std_msgs.msg import Bool, String
 from geometry_msgs.msg import Twist, Point, PoseStamped
@@ -16,7 +20,7 @@ def normalize_angle(angle):
         normalized_angle += 2*math.pi
     return normalized_angle - math.pi
 
-class LocalPlanner:
+class LocalPlanner(Node):
     def __init__(
         self,
         robot_frame='base_footprint',
@@ -27,12 +31,18 @@ class LocalPlanner:
         linear_speed_increment=0.01,
         angular_speed_increment=0.1,
     ):
-        rospy.on_shutdown(self.shutdown)
-        self.cmd_vel = rospy.Publisher('cmd_vel', Twist, queue_size=5) # gazebo
-        # * self.cmd_vel = rospy.Publisher('cmd_vel_mux/input/teleop', Twist, queue_size=5) # real world
-        self.waypoint_reached_pub = rospy.Publisher('/waypoint_reached', Bool, queue_size=1)
+        super().__init__('png_navigation_local_planner')
+        
+        # Setup QoS profile
+        qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        
+        self.cmd_vel = self.create_publisher(Twist, 'cmd_vel', qos_profile) # gazebo
+        # * self.cmd_vel = self.create_publisher(Twist, 'cmd_vel_mux/input/teleop', qos_profile) # real world
+        self.waypoint_reached_pub = self.create_publisher(Bool, '/waypoint_reached', qos_profile)
 
-        self.tf_listener = tf.TransformListener()
+        # Setup TF2
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.odom_frame = 'map'
         self.base_frame = robot_frame
 
@@ -56,29 +66,34 @@ class LocalPlanner:
         self.angle_threshold = angle_threshold
         self.drive_robot = False
 
-        rospy.Subscriber('/waypoint', PoseStamped, self.waypoint_callback)
-        rospy.Subscriber('png_navigation/local_planner_clock', String, self.clock_callback)
-        rospy.loginfo("Local Planner is initialized.")
+        self.create_subscription(PoseStamped, '/waypoint', self.waypoint_callback, qos_profile)
+        self.create_subscription(String, 'png_navigation/local_planner_clock', self.clock_callback, qos_profile)
+        self.get_logger().info("Local Planner is initialized.")
 
     def waypoint_callback(self, msg):
         self.goal_x = msg.pose.position.x
         self.goal_y = msg.pose.position.y
         if msg.pose.position.z != 0:
             self.is_global_goal = True
-            angles = tf.transformations.euler_from_quaternion([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
+            angles = tf_transformations.euler_from_quaternion([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
             self.goal_yaw = angles[-1]
         self.drive_robot = True
     
-    def clock_callback(self, msg):
+    def clock_callback(self, msg):  # noqa: ARG002
         if not self.drive_robot:
             return
-        position, rotation = self.get_pose()
+        pose_result = self.get_pose()
+        if pose_result is None:
+            return
+        position, rotation = pose_result
         distance = np.sqrt((self.goal_x - position.x)**2 + (self.goal_y - position.y)**2)
      
         if distance < self.distance_threshold[0]:
             if not self.is_global_goal:
-                rospy.loginfo("Waypoint reached.")
-                self.waypoint_reached_pub.publish(True)
+                self.get_logger().info("Waypoint reached.")
+                waypoint_reached_msg = Bool()
+                waypoint_reached_msg.data = True
+                self.waypoint_reached_pub.publish(waypoint_reached_msg)
                 return
             else:
                 self.target_linear_speed = 0
@@ -101,8 +116,10 @@ class LocalPlanner:
                     self.target_angular_speed = 0
                     self.send_velocity_command(self.target_linear_speed, self.target_angular_speed)
                     if self.linear_speed==0 and self.angular_speed==0:
-                        rospy.loginfo("Global goal reached announced by local planner.") # global goal reached
-                        self.waypoint_reached_pub.publish(True)
+                        self.get_logger().info("Global goal reached announced by local planner.") # global goal reached
+                        waypoint_reached_msg = Bool()
+                        waypoint_reached_msg.data = True
+                        self.waypoint_reached_pub.publish(waypoint_reached_msg)
                         self.drive_robot = False
                         self.goal_yaw = None
                         self.is_global_goal = False
@@ -155,24 +172,34 @@ class LocalPlanner:
 
     def get_pose(self):
         try:
-            (trans, rot) = self.tf_listener.lookupTransform(self.odom_frame, self.base_frame, rospy.Time(0))
-            rotation = euler_from_quaternion(rot)
-        except (tf.Exception, tf.ConnectivityException, tf.LookupException):
-            rospy.loginfo("TF Exception")
-            return
-        return Point(*trans), rotation[2]
+            transform = self.tf_buffer.lookup_transform(
+                self.odom_frame, 
+                self.base_frame, 
+                rclpy.time.Time()
+            )
+            trans = transform.transform.translation
+            rot = transform.transform.rotation
+            rotation = tf_transformations.euler_from_quaternion([rot.x, rot.y, rot.z, rot.w])
+        except TransformException:
+            self.get_logger().info("TF Exception")
+            return None
+        return Point(x=trans.x, y=trans.y, z=trans.z), rotation[2]
 
     def shutdown(self):
         self.cmd_vel.publish(Twist())
-        rospy.sleep(1)
+        time.sleep(1)
 
 
 if __name__ == '__main__':
     try:
-        rospy.init_node('png_navigation_local_planner', anonymous=True)
+        rclpy.init()
         gp = LocalPlanner()
-        rospy.spin()
-    except rospy.ROSInterruptException:
+        rclpy.spin(gp)
+    except KeyboardInterrupt:
         pass
+    finally:
+        if rclpy.ok():
+            gp.shutdown()
+            rclpy.shutdown()
 
 
