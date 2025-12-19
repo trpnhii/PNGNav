@@ -2,12 +2,16 @@
 import argparse
 from os.path import join
 
-import tf
 import yaml
-import rospy
-import rospkg
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 import numpy as np
 from PIL import Image
+import tf2_ros
+from tf2_ros import TransformException
+from ament_index_python.packages import get_package_share_directory
+import tf_transformations
 
 from png_navigation.configs.rrt_star_config import Config
 from png_navigation.path_planning_classes.rrt_env_2d import Env
@@ -29,7 +33,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--map', type=str, default='map_gazebo')
     parser.add_argument('--use_neural_wrapper', action='store_true')
-    options, unknown = parser.parse_known_args()
+    options, _ = parser.parse_known_args()
     return options
 
 def get_env_dict(map_filename, package_path):
@@ -80,9 +84,10 @@ def get_env_dict(map_filename, package_path):
         }
     return env_dict
     
-def get_pose_msg(x, y, theta, frame_id='map', is_goal=False):
+def get_pose_msg(x, y, theta, frame_id='map', is_goal=False, node=None):
     pose_msg = PoseStamped()
-    pose_msg.header.stamp = rospy.Time.now()
+    if node is not None:
+        pose_msg.header.stamp = node.get_clock().now().to_msg()
     pose_msg.header.frame_id = frame_id
     pose_msg.pose.position.x = x
     pose_msg.pose.position.y = y
@@ -90,7 +95,7 @@ def get_pose_msg(x, y, theta, frame_id='map', is_goal=False):
         pose_msg.pose.position.z = 1. # * fake z for indicator of goal waypoint
     else:
         pose_msg.pose.position.z = 0.
-    quaternion = tf.transformations.quaternion_from_euler(0, 0, theta) # theta radian
+    quaternion = tf_transformations.quaternion_from_euler(0, 0, theta) # theta radian
     pose_msg.pose.orientation.x = quaternion[0]
     pose_msg.pose.orientation.y = quaternion[1]
     pose_msg.pose.orientation.z = quaternion[2]
@@ -98,40 +103,69 @@ def get_pose_msg(x, y, theta, frame_id='map', is_goal=False):
     return pose_msg
 
 
-class GlobalPlanner:
+class GlobalPlanner(Node):
     def __init__(
         self,
         config,
         env,
         args,
     ):
+        super().__init__('png_navigation_global_planner')
         # * first ignore the lidar obstacles, only use static map 
         self.env = env
         self.config = config
         self.args = args
         self.ros_config = config.ros_config
-        self.tf_listener = tf.TransformListener()
-        self.tf_listener.waitForTransform("map", self.ros_config.robot_frame, rospy.Time(), rospy.Duration(4.0))
+        
+        # Setup TF2
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        
+        # Wait for transform to be available
+        try:
+            self.tf_buffer.lookup_transform(
+                "map", 
+                self.ros_config.robot_frame, 
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=4.0)
+            )
+        except TransformException as ex:
+            self.get_logger().warn(f'Could not transform map to {self.ros_config.robot_frame}: {ex}')
+        
         self.robot_pose = self.get_robot_pose()
         self.path = None
         self.x_goal = None
         self.goal_yaw = None
         self.goal_yaw_reached = False
-        self.global_plan_pub = rospy.Publisher('/global_plan', Path, queue_size=10)
-        self.global_plan_visual_pub = rospy.Publisher('png_navigation/global_plan', MarkerArray, queue_size=10)
-        self.waypoint_pub = rospy.Publisher('/waypoint', PoseStamped, queue_size=10)
-        self.goal_reached_pub = rospy.Publisher('/goal_reached', Bool, queue_size=10)
-        rospy.Subscriber(self.ros_config.nav_goal_topic, PoseStamped, self.nav_goal_callback)
-        rospy.Subscriber('/waypoint_reached', Bool, self.waypoint_reached_callback)
+        
+        # Create publishers with QoS profile
+        qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        self.global_plan_pub = self.create_publisher(Path, '/global_plan', qos_profile)
+        self.global_plan_visual_pub = self.create_publisher(MarkerArray, 'png_navigation/global_plan', qos_profile)
+        self.waypoint_pub = self.create_publisher(PoseStamped, '/waypoint', qos_profile)
+        self.goal_reached_pub = self.create_publisher(Bool, '/goal_reached', qos_profile)
+        
+        # Create subscribers
+        self.create_subscription(PoseStamped, self.ros_config.nav_goal_topic, self.nav_goal_callback, qos_profile)
+        self.create_subscription(Bool, '/waypoint_reached', self.waypoint_reached_callback, qos_profile)
+        
+        # Create service clients
+        self.set_env_client = self.create_client(SetEnv, 'png_navigation/set_env_2d')
+        self.get_global_plan_client = self.create_client(GetGlobalPlan, 'png_navigation/get_global_plan')
+        if self.args.use_neural_wrapper:
+            self.neural_wrapper_set_env_client = self.create_client(SetEnv, 'png_navigation/neural_wrapper_set_env_2d')
+        
         self.path_waypoint_idx = 0
         self.set_environment()
         if self.args.use_neural_wrapper:
             self.set_environment_for_neural_wrapper()
 
     def set_environment(self):
-        rospy.wait_for_service('png_navigation/set_env_2d')
+        if not self.set_env_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('Service png_navigation/set_env_2d not available')
+            return None
         try:
-            set_env_2d_proxy = rospy.ServiceProxy('png_navigation/set_env_2d', SetEnv)
+            request = SetEnv.Request()
             request_env = NavigationEnvMsg()
             request_env.num_dimensions = 2
             request_env.x_range = self.env.x_range
@@ -139,22 +173,27 @@ class GlobalPlanner:
             if self.env.obs_circle is None:
                 request_env.circle_obstacles = []
             else:
-                request_env.circle_obstacles = np.array(self.env.obs_circle).flatten()
+                request_env.circle_obstacles = np.array(self.env.obs_circle).flatten().tolist()
             if self.env.obs_rectangle is None:
                 request_env.rectangle_obstacles = []
             else:
-                request_env.rectangle_obstacles = np.array(self.env.obs_rectangle).flatten()
-            response = set_env_2d_proxy(request_env)
+                request_env.rectangle_obstacles = np.array(self.env.obs_rectangle).flatten().tolist()
+            request.env = request_env
+            future = self.set_env_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future)
+            response = future.result()
             return response
-        except rospy.ServiceException as e:
-            rospy.logerr("Service call failed: %s" % e)
+        except Exception as e:
+            self.get_logger().error(f"Service call failed: {e}")
             return None
     
     def set_environment_for_neural_wrapper(self):
-        print("Intializing env in neural wrapper")
-        rospy.wait_for_service('png_navigation/neural_wrapper_set_env_2d')
+        self.get_logger().info("Initializing env in neural wrapper")
+        if not self.neural_wrapper_set_env_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('Service png_navigation/neural_wrapper_set_env_2d not available')
+            return None
         try:
-            set_env_2d_neural_wrapper_proxy = rospy.ServiceProxy('png_navigation/neural_wrapper_set_env_2d', SetEnv)
+            request = SetEnv.Request()
             request_env = NavigationEnvMsg()
             request_env.num_dimensions = 2
             request_env.x_range = self.env.x_range
@@ -162,31 +201,34 @@ class GlobalPlanner:
             if self.env.obs_circle is None:
                 request_env.circle_obstacles = []
             else:
-                request_env.circle_obstacles = np.array(self.env.obs_circle).flatten()
+                request_env.circle_obstacles = np.array(self.env.obs_circle).flatten().tolist()
             if self.env.obs_rectangle is None:
                 request_env.rectangle_obstacles = []
             else:
-                request_env.rectangle_obstacles = np.array(self.env.obs_rectangle).flatten()
-            response = set_env_2d_neural_wrapper_proxy(request_env)
+                request_env.rectangle_obstacles = np.array(self.env.obs_rectangle).flatten().tolist()
+            request.env = request_env
+            future = self.neural_wrapper_set_env_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future)
+            response = future.result()
             return response
-        except rospy.ServiceException as e:
-            rospy.logerr("Service call failed: %s" % e)
+        except Exception as e:
+            self.get_logger().error(f"Service call failed: {e}")
             return None  
 
     def nav_goal_callback(self, msg):
-        goal_position, goal_orientation = msg.pose.position, msg.pose.orientation
-        angles = tf.transformations.euler_from_quaternion([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
+        goal_position = msg.pose.position
+        angles = tf_transformations.euler_from_quaternion([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
         self.x_goal = [goal_position.x, goal_position.y]
         self.goal_yaw = angles[-1]
         self.plan()
 
-    def waypoint_reached_callback(self, msg):
+    def waypoint_reached_callback(self, msg):  # noqa: ARG002
         if self.path_waypoint_idx == len(self.path)-1:
             goal_reached_msg = Bool()
             # Set the value of the Bool message
             goal_reached_msg.data = True  # Set to True or False based on your requirement
             self.goal_reached_pub.publish(goal_reached_msg)
-            rospy.loginfo("Goal is reached.")
+            self.get_logger().info("Goal is reached.")
             return
         self.path_waypoint_idx += 1
         self.publish_waypoint()
@@ -198,7 +240,7 @@ class GlobalPlanner:
         while robot_pose is None:
             robot_pose = self.get_robot_pose()
         self.robot_pose = robot_pose
-        print(self.robot_pose)
+        self.get_logger().info(f"Robot pose: {self.robot_pose}")
         x_start = self.robot_pose[:2]
         problem = {}
         problem['x_start'] = x_start
@@ -206,9 +248,11 @@ class GlobalPlanner:
         problem['search_radius'] = 10 # * may be computed based on map, unit: m.
         problem['env'] = self.env
 
-        rospy.wait_for_service('png_navigation/get_global_plan')
+        if not self.get_global_plan_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('Service png_navigation/get_global_plan not available')
+            return
         try:
-            get_global_plan_proxy = rospy.ServiceProxy('png_navigation/get_global_plan', GetGlobalPlan)
+            request = GetGlobalPlan.Request()
             plan_request = NavigationProblem()
             plan_request.num_dimensions = 2
             plan_request.start = x_start
@@ -217,20 +261,23 @@ class GlobalPlanner:
             plan_request.clearance = self.config.robot_config.clearance_radius
             plan_request.max_time = self.config.path_planner_args.max_time # 5 second
             plan_request.max_iterations = 50000
-            response = get_global_plan_proxy(plan_request)
+            request.problem = plan_request
+            future = self.get_global_plan_client.call_async(request)
+            rclpy.spin_until_future_complete(self, future)
+            response = future.result()
             if response.is_solved:
                 self.path = np.array(response.path).reshape(-1,2) # np (n, 2)
                 self.path_waypoint_idx = 1
                 global_plan_msg = self.generate_path_msg(self.path)
                 self.global_plan_pub.publish(global_plan_msg)
                 self.publish_global_path_visual(self.path)
-                rospy.loginfo("published global plan")
+                self.get_logger().info("published global plan")
                 self.publish_waypoint()
             else:
-                rospy.loginfo("Failure to find a global path is not implemented yet.")
-                rospy.loginfo(plan_request)
-        except rospy.ServiceException as e:
-            rospy.logerr("Service call failed: %s" % e)
+                self.get_logger().info("Failure to find a global path is not implemented yet.")
+                self.get_logger().info(f"Plan request: {plan_request}")
+        except Exception as e:
+            self.get_logger().error(f"Service call failed: {e}")
     
     def publish_waypoint(self, frame_id="map"):
         if self.path is None:
@@ -238,24 +285,31 @@ class GlobalPlanner:
         if self.path_waypoint_idx == len(self.path)-1:
             x, y = self.path[self.path_waypoint_idx]
             theta = self.goal_yaw
-            pose_msg = get_pose_msg(x, y, theta, frame_id=frame_id, is_goal=True)
+            pose_msg = get_pose_msg(x, y, theta, frame_id=frame_id, is_goal=True, node=self)
             self.waypoint_pub.publish(pose_msg)
         else:
             x, y = self.path[self.path_waypoint_idx]
             theta = 0
-            pose_msg = get_pose_msg(x, y, theta, frame_id=frame_id)
+            pose_msg = get_pose_msg(x, y, theta, frame_id=frame_id, node=self)
             self.waypoint_pub.publish(pose_msg)
     
     def get_robot_pose(self):
         try:
-            (trans, rot) = self.tf_listener.lookupTransform("map", self.ros_config.robot_frame, rospy.Time(0))
-            robot_x, robot_y = trans[:2]
-            euler = tf.transformations.euler_from_quaternion(rot)
+            transform = self.tf_buffer.lookup_transform(
+                "map", 
+                self.ros_config.robot_frame, 
+                rclpy.time.Time()
+            )
+            trans = transform.transform.translation
+            rot = transform.transform.rotation
+            robot_x = trans.x
+            robot_y = trans.y
+            euler = tf_transformations.euler_from_quaternion([rot.x, rot.y, rot.z, rot.w])
             robot_theta = euler[2]
             robot_pose = [robot_x, robot_y, robot_theta]
-        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+        except TransformException as ex:
             robot_pose = None
-            rospy.logwarn("Error getting the transformation for robot pose.")
+            self.get_logger().warn(f"Error getting the transformation for robot pose: {ex}")
         return robot_pose
     
     def publish_global_path_visual(self, path, frame_id="map"):
@@ -303,25 +357,36 @@ class GlobalPlanner:
                 marker_id += 1
             self.global_plan_visual_pub.publish(path_visual_msg)
 
-    @staticmethod
-    def generate_path_msg(path, frame_id="map"):
+    def generate_path_msg(self, path, frame_id="map"):
         # Create a new nav_msgs/Path message
         path_msg = Path()
         # Set the header of the Path message
-        path_msg.header.stamp = rospy.Time.now()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
         path_msg.header.frame_id = frame_id
         for waypoint in path:
             x, y = waypoint
             theta = 0
-            pose_msg = get_pose_msg(x, y, theta, frame_id=frame_id)
+            pose_msg = get_pose_msg(x, y, theta, frame_id=frame_id, node=self)
             path_msg.poses.append(pose_msg)
         return path_msg
 
 def main(args):
     config = Config()
     package_name = 'png_navigation'
-    rospack = rospkg.RosPack()
-    package_path = rospack.get_path(package_name)
+    try:
+        package_path = get_package_share_directory(package_name)
+        # In ROS2, get_package_share_directory returns the share directory
+        # We need to go up one level to get to the package root
+        import os
+        package_path = os.path.join(package_path, '..', '..', 'src', package_name)
+        package_path = os.path.abspath(package_path)
+    except Exception:  # noqa: BLE001
+        # Fallback: try to find package using current file location
+        import os
+        current_file = os.path.abspath(__file__)
+        package_path = os.path.join(os.path.dirname(current_file), '..', '..')
+        package_path = os.path.abspath(package_path)
+    
     env_dict = get_env_dict(args.map, package_path)
     env = Env(env_dict)
     gp = GlobalPlanner(
@@ -329,14 +394,17 @@ def main(args):
         env,
         args,
     )
-    print("Global Planner is initialized.")
+    gp.get_logger().info("Global Planner is initialized.")
+    return gp
 
 if __name__ == '__main__':
     try:
         args = parse_args()
-        # print(args)
-        rospy.init_node('png_navigation_global_planner', anonymous=True)
-        main(args)
-        rospy.spin()
-    except rospy.ROSInterruptException:
+        rclpy.init()
+        gp = main(args)
+        rclpy.spin(gp)
+    except KeyboardInterrupt:
         pass
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()

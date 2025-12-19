@@ -140,10 +140,21 @@
 
 **Purpose**: High-level navigation planner
 
-**ROS2 Compatibility**: ❌ Needs ROS2 conversion - Uses `rospy` and `rospkg` for ROS1 nodes, topics, services, and TF. Need to convert to `rclpy` and `rclpy.tf2_ros` for ROS2.
+**ROS2 Compatibility**: ✅ Converted to ROS2 compatible (2025-12-19 19:24:55) - Converted from `rospy` to `rclpy`, `rospkg` to `ament_index_python`, and `tf` to `tf2_ros`. The `GlobalPlanner` class now inherits from `rclpy.node.Node`, uses ROS2 publishers/subscribers/services, and TF2 transforms.
 
--   `src/png_navigation/scripts/global_planner_node.py` (❌ uses rospy, rospkg, tf)
+-   `src/png_navigation/scripts/global_planner_node.py` (✅ converted to ROS2 - uses rclpy, ament_index_python, tf2_ros)
     -   Uses: Part 1 (rrt_env_2d), Part 2 (config), Part 5 (map_utils)
+    -   **Changes**:
+        -   Replaced `rospy` with `rclpy` and `rclpy.node.Node`
+        -   Replaced `rospkg.RosPack()` with `ament_index_python.packages.get_package_share_directory()`
+        -   Replaced `tf.TransformListener()` with `tf2_ros.TransformListener()` and `tf2_ros.Buffer()`
+        -   Converted `rospy.Publisher` to `node.create_publisher()` with QoS profiles
+        -   Converted `rospy.Subscriber` to `node.create_subscription()`
+        -   Converted `rospy.ServiceProxy` to `node.create_client()` with async calls
+        -   Updated time handling: `rospy.Time.now()` → `node.get_clock().now()`
+        -   Updated logging: `rospy.loginfo()` → `node.get_logger().info()`
+        -   Updated TF transforms to use `tf2_ros` API
+        -   Replaced `tf.transformations` with `tf_transformations`
 
 ---
 
@@ -212,7 +223,7 @@
 
 ## ROS2 Compatibility Summary
 
-**✅ ROS2 Compatible (10 parts):**
+**✅ ROS2 Compatible (11 parts):**
 
 -   Part 1: Core Utilities
 -   Part 2: Configuration
@@ -223,13 +234,13 @@
 -   Part 8: Neural Network Models
 -   Part 9: Neural Network Wrapper
 -   Part 10: Neural Network Wrapper with BFS
+-   Part 12: Global Planner - ✅ Converted (2025-12-19 19:24:55)
 -   Part 16: Package Setup (**init**.py files only)
 
-**❌ Needs ROS2 Conversion (6 parts):**
+**❌ Needs ROS2 Conversion (5 parts):**
 
 -   Part 4: Path Planning Algorithms (4 out of 5 files use rospy)
 -   Part 11: ROS Path Planning Service Nodes
--   Part 12: Global Planner
 -   Part 13: Local Planner
 -   Part 14: Neural Wrapper ROS Nodes
 -   Part 15: Dynamic Obstacles Handling
