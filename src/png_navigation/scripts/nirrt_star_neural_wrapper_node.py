@@ -1,11 +1,14 @@
 #!/home/zhe/miniconda3/envs/pngenv/bin/python
 import struct
 from os.path import join
+import os
 
-import rospy
-import rospkg
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 import numpy as np
 from std_msgs.msg import Float64MultiArray
+from ament_index_python.packages import get_package_share_directory
 
 import std_msgs.msg
 from sensor_msgs import point_cloud2
@@ -21,7 +24,7 @@ from png_navigation.msg import NIRRTWrapperMsg
 from png_navigation.srv import SetEnv, SetEnvResponse
 
 
-class NeuralWrapperNode:
+class NeuralWrapperNode(Node):
     def __init__(
         self,
         pc_n_points,
@@ -29,10 +32,19 @@ class NeuralWrapperNode:
         clearance,
         step_len,
     ):
-        rospy.init_node('png_navigation_nirrt_star_neural_wrapper_node', anonymous=True)
+        super().__init__('png_navigation_nirrt_star_neural_wrapper_node')
         package_name = 'png_navigation'
-        rospack = rospkg.RosPack()
-        package_path = rospack.get_path(package_name)
+        try:
+            package_path = get_package_share_directory(package_name)
+            # In ROS2, get_package_share_directory returns the share directory
+            # We need to go up one level to get to the package root
+            package_path = os.path.join(package_path, '..', '..', 'src', package_name)
+            package_path = os.path.abspath(package_path)
+        except Exception:  # noqa: BLE001
+            # Fallback: try to find package using current file location
+            current_file = os.path.abspath(__file__)
+            package_path = os.path.join(os.path.dirname(current_file), '..', '..')
+            package_path = os.path.abspath(package_path)
         root_folderpath = join(package_path, 'src/png_navigation')
         self.neural_wrapper = NeuralWrapper(
             root_dir=root_folderpath,
@@ -42,31 +54,34 @@ class NeuralWrapperNode:
         self.pc_over_sample_scale = pc_over_sample_scale
         self.pc_neighbor_radius = step_len
         self.clearance = clearance
-        self.pub = rospy.Publisher('wrapper_output', Float64MultiArray, queue_size=10)
-        self.guidance_states_pub = rospy.Publisher('guidance_states', PointCloud2, queue_size=10)
-        self.no_guidance_states_pub = rospy.Publisher('no_guidance_states', PointCloud2, queue_size=10)
-        rospy.Subscriber('wrapper_input', NIRRTWrapperMsg, self.callback, queue_size=1) # * throw away outdated messages
-        rospy.Service('png_navigation/neural_wrapper_set_env_2d', SetEnv, self.set_env)
+        
+        # Setup QoS profile
+        qos_profile = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        self.pub = self.create_publisher(Float64MultiArray, 'wrapper_output', qos_profile)
+        self.guidance_states_pub = self.create_publisher(PointCloud2, 'guidance_states', qos_profile)
+        self.no_guidance_states_pub = self.create_publisher(PointCloud2, 'no_guidance_states', qos_profile)
+        self.create_subscription(NIRRTWrapperMsg, 'wrapper_input', self.callback, qos_profile) # * throw away outdated messages
+        self.set_env_service = self.create_service(SetEnv, 'png_navigation/neural_wrapper_set_env_2d', self.set_env)
 
-    def set_env(self, request):
-        if len(request.request_env.circle_obstacles)>0:
-            circle_obstacles = np.array(request.request_env.circle_obstacles).reshape(-1,3)
+    def set_env(self, request, response):
+        if len(request.env.circle_obstacles)>0:
+            circle_obstacles = np.array(request.env.circle_obstacles).reshape(-1,3)
         else:
             circle_obstacles = []
-        if len(request.request_env.rectangle_obstacles)>0:
-            rectangle_obstacles = np.array(request.request_env.rectangle_obstacles).reshape(-1,4)
+        if len(request.env.rectangle_obstacles)>0:
+            rectangle_obstacles = np.array(request.env.rectangle_obstacles).reshape(-1,4)
         else:
             rectangle_obstacles = []       
         env_dict = {
-            'x_range': request.request_env.x_range,
-            'y_range': request.request_env.y_range,
+            'x_range': request.env.x_range,
+            'y_range': request.env.y_range,
             'circle_obstacles': circle_obstacles,
             'rectangle_obstacles': rectangle_obstacles,
         }
         self.env = Env(env_dict)
-        rospy.loginfo("Environment is set for Neural Wrapper.")
-        is_set = True
-        return SetEnvResponse(is_set)
+        self.get_logger().info("Environment is set for Neural Wrapper.")
+        response.is_set = True
+        return response
     
     def callback(self, msg):
         x_start = np.array(msg.x_start).astype(np.float64)
@@ -114,7 +129,7 @@ class NeuralWrapperNode:
         self.pub.publish(msg)
 
         header = std_msgs.msg.Header()
-        header.stamp = rospy.Time.now()
+        header.stamp = self.get_clock().now().to_msg()
         header.frame_id = "map"
         fields = [
             PointField('x', 0, PointField.FLOAT32, 1),
@@ -137,7 +152,7 @@ class NeuralWrapperNode:
         self.guidance_states_pub.publish(cloud_msg)
 
         header = std_msgs.msg.Header()
-        header.stamp = rospy.Time.now()
+        header.stamp = self.get_clock().now().to_msg()
         header.frame_id = "map"
         fields = [
             PointField('x', 0, PointField.FLOAT32, 1),
@@ -160,12 +175,24 @@ class NeuralWrapperNode:
         cloud_msg = point_cloud2.create_cloud(header, fields, points)
         self.no_guidance_states_pub.publish(cloud_msg)
 
-config = Config()
-nwn = NeuralWrapperNode(
-    config.png_config.pc_n_points,
-    config.png_config.pc_over_sample_scale,
-    config.png_config.clearance,
-    config.png_config.step_len,
-)
-rospy.spin()
+def main():
+    rclpy.init()
+    config = Config()
+    nwn = NeuralWrapperNode(
+        config.png_config.pc_n_points,
+        config.png_config.pc_over_sample_scale,
+        config.png_config.clearance,
+        config.png_config.step_len,
+    )
+    try:
+        rclpy.spin(nwn)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
       
