@@ -9,3 +9,5 @@ PNG/
 *.zip
 src/turtlebot3_simulations
 /.vscode
+install/
+log/

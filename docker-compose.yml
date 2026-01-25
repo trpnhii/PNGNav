@@ -7,34 +7,58 @@ services:
       dockerfile: Dockerfile
     container_name: pngnav-simulation
     image: pngnav:ros2-gazebo
-    # Note: network_mode: host may not work on Windows Docker Desktop
-    # If ROS2 communication fails, remove this line and expose ports manually
+
+    # Use host network for reliable ROS2 discovery on Docker Desktop
     network_mode: host
     privileged: true
+
+    # GPU Configuration for PyTorch/CUDA
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
     environment:
-      # Windows X11 forwarding - using Wi-Fi adapter IP
-      # If this doesn't work, try: host.docker.internal:0.0
-      - DISPLAY=192.168.1.7:0.0
+      # --- Display & UI ---
+      # host.docker.internal works best for VcXsrv/GWSL on Windows
+      - DISPLAY=host.docker.internal:0.0
       - QT_X11_NO_MITSHM=1
+
+      # --- ROS2 Settings ---
       - TURTLEBOT3_MODEL=waffle_pi
       - ROS_DOMAIN_ID=0
-      # Fix ROS2 discovery issues on Docker Desktop (multicast problems):
-      # Force DDS to use localhost only, and use CycloneDDS (more reliable in containers).
-      - ROS_LOCALHOST_ONLY=1
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - GAZEBO_MODEL_PATH=/opt/ros/humble/share/turtlebot3_gazebo/models
+      - ROS_LOCALHOST_ONLY=0
+
+      # --- Gazebo Pathing & Stability ---
+      # Disables the online model check that causes hangs
+      - GAZEBO_MODEL_DATABASE_URI=
+      # Includes TurtleBot3 models, local simulation models, and system models
+      - GAZEBO_MODEL_PATH=/workspace/PNGNav/src/png_navigation/models:/opt/ros/humble/share/turtlebot3_gazebo/models:/usr/share/gazebo-11/models
+      - GAZEBO_RESOURCE_PATH=/usr/share/gazebo-11
+
+      # --- NVIDIA Graphics ---
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all,graphics,utility,compute
+
     volumes:
-      # X11 socket mount (Linux only - not needed for Windows)
-      # - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # Mount the workspace for code changes
+      # Mount the project directory so code changes reflect immediately
       - ./:/workspace/PNGNav
-      # Persist conda environment (optional, for faster rebuilds)
+      # Persist the conda environment across container restarts
       - conda-env:/opt/conda/envs
-    devices:
-      # Allow access to GPU if available (for neural network)
-      - /dev/dri:/dev/dri
+      # X11 Unix socket (Standard for Linux, doesn't hurt on Windows)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+    # Increase shared memory size (Crucial for Gazebo sensor data/Lidar)
+    shm_size: '2gb'
+
     stdin_open: true
     tty: true
+
+    # Default entry point is the script defined in your Dockerfile
     command: /bin/bash
 
 volumes:
