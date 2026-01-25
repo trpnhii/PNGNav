@@ -45,3 +45,15 @@ source install/setup.bash
 
 # Try again
 ros2 launch png_navigation turtlebot3_navigation.launch.py
+
+
+
+#############################
+### FIX WINDOWS NEWLINE #####
+# Convert line endings for all Python scripts
+cd /workspace/PNGNav/install/png_navigation/lib/png_navigation/
+sed -i 's/\r$//' *.py
+
+# Also fix source scripts for future builds
+cd /workspace/PNGNav/src/png_navigation/scripts/
+sed -i 's/\r$//' *.py
