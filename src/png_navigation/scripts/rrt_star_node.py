@@ -1,4 +1,4 @@
-#!/home/zhe/miniconda3/envs/pngenv/bin/python
+#!/opt/conda/envs/pngenv/bin/python
 import rclpy
 from rclpy.node import Node
 import numpy as np

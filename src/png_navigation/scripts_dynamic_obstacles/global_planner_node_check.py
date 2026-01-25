@@ -1,4 +1,4 @@
-#!/usr/bin/python3.8
+#!/opt/conda/envs/pngenv/bin/python
 import copy
 import argparse
 from os.path import join

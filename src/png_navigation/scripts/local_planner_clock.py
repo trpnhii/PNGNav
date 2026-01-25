@@ -1,4 +1,4 @@
-#!/usr/bin/python3.8
+#!/opt/conda/envs/pngenv/bin/python
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy

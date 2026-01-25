@@ -1,4 +1,4 @@
-#!/home/zhe/miniconda3/envs/pngenv/bin/python
+#!/opt/conda/envs/pngenv/bin/python
 import struct
 from os.path import join
 import os
