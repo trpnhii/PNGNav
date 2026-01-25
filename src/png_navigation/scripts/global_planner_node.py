@@ -37,7 +37,7 @@ def parse_args():
     return options
 
 def get_env_dict(map_filename, package_path):
-    map_folderpath = join(package_path, 'src/png_navigation/maps')
+    map_folderpath = join(package_path, 'maps')
     map_config_filepath = join(map_folderpath, map_filename+'.yaml')
     with open(map_config_filepath, 'r') as file:
         map_config = yaml.safe_load(file)

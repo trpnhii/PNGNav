@@ -7,12 +7,14 @@ endif()
 
 # Find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 # Generate messages and services
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -42,10 +44,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Install Python source modules to lib/python site-packages
+# Install Python source modules to the same path as rosidl-generated messages
+# rosidl uses local/lib/pythonX.Y/dist-packages/
 install(DIRECTORY
   src/${PROJECT_NAME}/
-  DESTINATION lib/python3/dist-packages/${PROJECT_NAME}
+  DESTINATION local/lib/python${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR}/dist-packages/${PROJECT_NAME}
   PATTERN "__pycache__" EXCLUDE
   PATTERN "*.pyc" EXCLUDE
 )

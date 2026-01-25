@@ -7,8 +7,8 @@ from png_navigation.configs.rrt_star_config import Config
 from png_navigation.path_planning_classes.rrt_env_2d import Env
 from png_navigation.path_planning_classes.nrrt_star_png_2d import get_path_planner
 
-from png_navigation.srv import SetEnv, SetEnvResponse
-from png_navigation.srv import GetGlobalPlan, GetGlobalPlanResponse
+from png_navigation.srv import SetEnv
+from png_navigation.srv import GetGlobalPlan
 
 
 def get_fake_env():

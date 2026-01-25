@@ -21,7 +21,7 @@ from png_navigation.datasets.point_cloud_mask_utils_updated import get_point_clo
     generate_rectangle_point_cloud, ellipsoid_point_cloud_sampling
 
 from png_navigation.msg import NIRRTWrapperMsg
-from png_navigation.srv import SetEnv, SetEnvResponse
+from png_navigation.srv import SetEnv
 
 
 class NeuralWrapperNode(Node):

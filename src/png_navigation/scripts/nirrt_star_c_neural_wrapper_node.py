@@ -20,7 +20,7 @@ from std_msgs.msg import Float64MultiArray
 from sensor_msgs.msg import PointCloud2, PointField
 
 from png_navigation.msg import NIRRTWrapperMsg
-from png_navigation.srv import SetEnv, SetEnvResponse
+from png_navigation.srv import SetEnv
 
 
 class NeuralWrapperNode(Node):

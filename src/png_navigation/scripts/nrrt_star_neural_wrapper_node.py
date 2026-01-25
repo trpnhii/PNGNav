@@ -15,7 +15,7 @@ from std_msgs.msg import Float64MultiArray
 from sensor_msgs.msg import PointCloud2, PointField
 
 from png_navigation.msg import NIRRTWrapperMsg
-from png_navigation.srv import SetEnv, SetEnvResponse
+from png_navigation.srv import SetEnv
 
 from png_navigation.configs.rrt_star_config import Config
 from png_navigation.path_planning_classes.rrt_env_2d import Env
