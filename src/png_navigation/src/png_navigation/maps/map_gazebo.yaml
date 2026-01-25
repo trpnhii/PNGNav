@@ -1,4 +1,4 @@
-image: /home/zhe/map_gazebo.pgm
+image: map_gazebo.pgm
 resolution: 0.010000
 origin: [-10.000000, -10.000000, 0.000000]
 negate: 0
