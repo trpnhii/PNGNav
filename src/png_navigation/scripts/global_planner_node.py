@@ -168,8 +168,8 @@ class GlobalPlanner(Node):
             request = SetEnv.Request()
             request_env = NavigationEnvMsg()
             request_env.num_dimensions = 2
-            request_env.x_range = self.env.x_range
-            request_env.y_range = self.env.y_range
+            request_env.x_range = [float(x) for x in self.env.x_range]
+            request_env.y_range = [float(y) for y in self.env.y_range]
             if self.env.obs_circle is None:
                 request_env.circle_obstacles = []
             else:
@@ -178,7 +178,7 @@ class GlobalPlanner(Node):
                 request_env.rectangle_obstacles = []
             else:
                 request_env.rectangle_obstacles = np.array(self.env.obs_rectangle).flatten().tolist()
-            request.env = request_env
+            request.request_env = request_env
             future = self.set_env_client.call_async(request)
             rclpy.spin_until_future_complete(self, future)
             response = future.result()
@@ -196,8 +196,8 @@ class GlobalPlanner(Node):
             request = SetEnv.Request()
             request_env = NavigationEnvMsg()
             request_env.num_dimensions = 2
-            request_env.x_range = self.env.x_range
-            request_env.y_range = self.env.y_range
+            request_env.x_range = [float(x) for x in self.env.x_range]
+            request_env.y_range = [float(y) for y in self.env.y_range]
             if self.env.obs_circle is None:
                 request_env.circle_obstacles = []
             else:
@@ -206,7 +206,7 @@ class GlobalPlanner(Node):
                 request_env.rectangle_obstacles = []
             else:
                 request_env.rectangle_obstacles = np.array(self.env.obs_rectangle).flatten().tolist()
-            request.env = request_env
+            request.request_env = request_env
             future = self.neural_wrapper_set_env_client.call_async(request)
             rclpy.spin_until_future_complete(self, future)
             response = future.result()

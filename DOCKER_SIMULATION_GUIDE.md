@@ -49,6 +49,9 @@ source /opt/ros/humble/setup.bash
 cd /workspace/PNGNav
 colcon build --packages-select png_navigation
 
+# Fix Windows line endings (important if editing on Windows!)
+sed -i 's/\r$//' install/png_navigation/lib/png_navigation/*.py
+
 # Source workspace
 source install/setup.bash
 ```
@@ -104,10 +107,33 @@ ros2 launch png_navigation rrt_star.launch.py
 
 Wait for: **"Global Planner is initialized."**
 
-### 4. Test Navigation
+### 4. Set Initial Robot Pose (IMPORTANT)
+
+Before navigation can work, you must tell AMCL where the robot is on the map:
+
+1. **In RViz**, find the **"2D Pose Estimate"** button in the top toolbar
+2. **Click the button** to activate pose estimation mode
+3. **Look at Gazebo** to see where your robot actually is (note its position and which way it's facing)
+4. **Click on the RViz map** at that same location where the robot is in Gazebo
+5. **Drag the mouse** to set the orientation (green arrow shows which way the robot is facing - match it to Gazebo)
+6. **Release** - you should see green particle clouds appear around the robot
+7. **Optional**: Move the robot slightly using teleop to help AMCL converge:
+   ```bash
+   ros2 run turtlebot3_teleop teleop_keyboard
+   ```
+   Use arrow keys to move, then Ctrl+C to stop.
+
+**How to know it worked:**
+- Green particles in RViz should cluster tightly around the robot
+- The robot model in RViz should align with obstacles on the map
+- No more "waiting for initial pose" warnings in terminals
+
+**Default spawn location in Gazebo**: The TurtleBot3 spawns at approximately `(x=-2.0, y=-0.5)` facing forward in `turtlebot3_world`.
+
+### 5. Test Navigation
 
 1. In RViz, click **"2D Goal Pose"** button
-2. Click on the map where you want the robot to go
+2. Click on the map where you want the robot to go and drag to set orientation
 3. The robot should plan a path and navigate!
 
 ## Available Planners
@@ -159,6 +185,25 @@ ls /workspace/PNGNav/src/png_navigation/src/png_navigation/maps/
 # Check map server status
 ros2 topic echo /map --once
 ```
+
+### Initial pose not working / Robot not localized
+- Make sure the navigation launch (Terminal 2) is running and shows "AMCL active"
+- Check if the map is visible in RViz (gray/white grid with black obstacles)
+- Try setting the pose multiple times - click precisely where the robot is in Gazebo
+- Move the robot with teleop after setting pose to help particles converge
+- Check AMCL status:
+  ```bash
+  ros2 topic echo /amcl_pose --once
+  ```
+
+### "Waiting for map" or "map frame does not exist"
+- The navigation stack isn't fully initialized yet
+- Wait a few seconds after launching navigation
+- Check map server:
+  ```bash
+  ros2 lifecycle get /map_server
+  # Should show "active"
+  ```
 
 ## Container Management
 

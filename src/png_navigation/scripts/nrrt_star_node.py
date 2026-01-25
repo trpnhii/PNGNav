@@ -62,17 +62,17 @@ class NRRTStarNode(Node):
         return response
 
     def set_env(self, request, response):
-        if len(request.env.circle_obstacles)>0:
-            circle_obstacles = np.array(request.env.circle_obstacles).reshape(-1,3)
+        if len(request.request_env.circle_obstacles)>0:
+            circle_obstacles = np.array(request.request_env.circle_obstacles).reshape(-1,3)
         else:
             circle_obstacles = []
-        if len(request.env.rectangle_obstacles)>0:
-            rectangle_obstacles = np.array(request.env.rectangle_obstacles).reshape(-1,4)
+        if len(request.request_env.rectangle_obstacles)>0:
+            rectangle_obstacles = np.array(request.request_env.rectangle_obstacles).reshape(-1,4)
         else:
             rectangle_obstacles = []       
         env_dict = {
-            'x_range': request.env.x_range,
-            'y_range': request.env.y_range,
+            'x_range': request.request_env.x_range,
+            'y_range': request.request_env.y_range,
             'circle_obstacles': circle_obstacles,
             'rectangle_obstacles': rectangle_obstacles,
         }
