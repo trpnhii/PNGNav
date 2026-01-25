@@ -50,10 +50,16 @@ ros2 launch png_navigation turtlebot3_navigation.launch.py
 
 #############################
 ### FIX WINDOWS NEWLINE #####
-# Convert line endings for all Python scripts
-cd /workspace/PNGNav/install/png_navigation/lib/png_navigation/
-sed -i 's/\r$//' *.py
+cd /workspace/PNGNav
+rm -rf build install log
 
-# Also fix source scripts for future builds
-cd /workspace/PNGNav/src/png_navigation/scripts/
-sed -i 's/\r$//' *.py
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin:$PATH
+source /opt/ros/humble/setup.bash
+colcon build --packages-select png_navigation
+
+# Fix line endings again after rebuild
+sed -i 's/\r$//' install/png_navigation/lib/png_navigation/*.py
+
+source install/setup.bash
+conda activate pngenv
+ros2 launch png_navigation rrt_star.launch.py

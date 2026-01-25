@@ -375,16 +375,12 @@ def main(args):
     package_name = 'png_navigation'
     try:
         package_path = get_package_share_directory(package_name)
-        # In ROS2, get_package_share_directory returns the share directory
-        # We need to go up one level to get to the package root
-        import os
-        package_path = os.path.join(package_path, '..', '..', 'src', package_name)
-        package_path = os.path.abspath(package_path)
+        # Maps are installed in share/png_navigation/maps/
     except Exception:  # noqa: BLE001
         # Fallback: try to find package using current file location
         import os
         current_file = os.path.abspath(__file__)
-        package_path = os.path.join(os.path.dirname(current_file), '..', '..')
+        package_path = os.path.join(os.path.dirname(current_file), '..', '..', 'share', package_name)
         package_path = os.path.abspath(package_path)
     
     env_dict = get_env_dict(args.map, package_path)
