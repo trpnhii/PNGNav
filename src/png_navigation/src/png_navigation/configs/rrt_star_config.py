@@ -24,7 +24,7 @@ class Config(object):
     path_planner_args.pc_sample_rate = 0.5
 
     ros_config = BaseConfig()
-    ros_config.nav_goal_topic = '/move_base_simple/goal'
+    ros_config.nav_goal_topic = '/goal_pose'  # ROS2 RViz uses /goal_pose
     ros_config.robot_frame = 'base_footprint'
 
     png_config = BaseConfig()

@@ -255,11 +255,11 @@ class GlobalPlanner(Node):
             request = GetGlobalPlan.Request()
             plan_request = NavigationProblem()
             plan_request.num_dimensions = 2
-            plan_request.start = x_start
-            plan_request.goal = self.x_goal
-            plan_request.search_radius = 10 # * may be computed based on map, unit: m.
-            plan_request.clearance = self.config.robot_config.clearance_radius
-            plan_request.max_time = self.config.path_planner_args.max_time # 5 second
+            plan_request.start = [float(x) for x in x_start]
+            plan_request.goal = [float(x) for x in self.x_goal]
+            plan_request.search_radius = 10.0 # * may be computed based on map, unit: m.
+            plan_request.clearance = float(self.config.robot_config.clearance_radius)
+            plan_request.max_time = float(self.config.path_planner_args.max_time) # 5 second
             plan_request.max_iterations = 50000
             request.problem = plan_request
             future = self.get_global_plan_client.call_async(request)
