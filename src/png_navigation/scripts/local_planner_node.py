@@ -166,8 +166,8 @@ class LocalPlanner(Node):
         else:
             self.angular_speed += self.angular_speed_increment*(target_angular_speed-self.angular_speed)/abs(self.target_angular_speed-self.angular_speed)
         move_cmd = Twist()
-        move_cmd.linear.x = self.linear_speed
-        move_cmd.angular.z = self.angular_speed
+        move_cmd.linear.x = float(self.linear_speed)
+        move_cmd.angular.z = float(self.angular_speed)
         self.cmd_vel.publish(move_cmd)
 
     def get_pose(self):
