@@ -45,11 +45,11 @@ class NRRTStarNode(Node):
     
     def get_global_plan(self, request, response):
         self.planner.reset_robot(
-            x_start=request.problem.start,
-            x_goal=request.problem.goal,
+            x_start=request.plan_request.start,
+            x_goal=request.plan_request.goal,
             env=None,
-            search_radius=request.problem.search_radius,
-            max_time=request.problem.max_time,
+            search_radius=request.plan_request.search_radius,
+            max_time=request.plan_request.max_time,
         )
         # * clearance and max_iterations from plan_request are redundant and not used here.
         path = self.planner.planning_robot()

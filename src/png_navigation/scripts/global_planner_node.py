@@ -1,5 +1,6 @@
 #!/opt/conda/envs/pngenv/bin/python
 import argparse
+import time
 from os.path import join
 
 import yaml
@@ -252,6 +253,7 @@ class GlobalPlanner(Node):
             self.get_logger().error('Service png_navigation/get_global_plan not available')
             return
         try:
+            self.get_logger().info(f"Planning from {x_start} to {self.x_goal}")
             request = GetGlobalPlan.Request()
             plan_request = NavigationProblem()
             plan_request.num_dimensions = 2
@@ -261,9 +263,18 @@ class GlobalPlanner(Node):
             plan_request.clearance = float(self.config.robot_config.clearance_radius)
             plan_request.max_time = float(self.config.path_planner_args.max_time) # 5 second
             plan_request.max_iterations = 50000
-            request.problem = plan_request
+            request.plan_request = plan_request
+            self.get_logger().info("Calling planning service...")
             future = self.get_global_plan_client.call_async(request)
-            rclpy.spin_until_future_complete(self, future)
+            # Use timeout to avoid deadlock - planning takes max 2 seconds + buffer
+            timeout_sec = 10.0
+            start = time.time()
+            while not future.done():
+                rclpy.spin_once(self, timeout_sec=0.1)
+                if time.time() - start > timeout_sec:
+                    self.get_logger().error("Planning service timed out")
+                    return
+            self.get_logger().info("Planning service returned")
             response = future.result()
             if response.is_solved:
                 self.path = np.array(response.path).reshape(-1,2) # np (n, 2)

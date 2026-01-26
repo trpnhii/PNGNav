@@ -44,15 +44,18 @@ class RRTStarNode(Node):
         self.get_global_plan_service = self.create_service(GetGlobalPlan, 'png_navigation/get_global_plan', self.get_global_plan)
     
     def get_global_plan(self, request, response):
+        self.get_logger().info(f"Received plan request: start={request.plan_request.start}, goal={request.plan_request.goal}")
         self.planner.reset_robot(
-            x_start=request.problem.start,
-            x_goal=request.problem.goal,
+            x_start=request.plan_request.start,
+            x_goal=request.plan_request.goal,
             env=None,
-            search_radius=request.problem.search_radius,
-            max_time=request.problem.max_time,
+            search_radius=request.plan_request.search_radius,
+            max_time=request.plan_request.max_time,
         )
+        self.get_logger().info("Starting RRT* planning...")
         # * clearance and max_iterations from plan_request are redundant and not used here.
         path = self.planner.planning_robot()
+        self.get_logger().info(f"Planning complete, path length: {len(path)}")
         if len(path) == 0:
             response.is_solved = False
             response.path = []
