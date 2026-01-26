@@ -1,6 +1,7 @@
 #!/opt/conda/envs/pngenv/bin/python
 import argparse
 import time
+import threading
 from os.path import join
 
 import yaml
@@ -221,7 +222,9 @@ class GlobalPlanner(Node):
         angles = tf_transformations.euler_from_quaternion([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
         self.x_goal = [goal_position.x, goal_position.y]
         self.goal_yaw = angles[-1]
-        self.plan()
+        # Run planning in a separate thread to avoid blocking the executor
+        planning_thread = threading.Thread(target=self.plan)
+        planning_thread.start()
 
     def waypoint_reached_callback(self, msg):  # noqa: ARG002
         if self.path_waypoint_idx == len(self.path)-1:
@@ -266,10 +269,9 @@ class GlobalPlanner(Node):
             request.plan_request = plan_request
             self.get_logger().info("Calling planning service...")
             future = self.get_global_plan_client.call_async(request)
-            rclpy.spin_until_future_complete(self, future, timeout_sec=15.0)
-            if not future.done():
-                self.get_logger().error("Planning service timed out")
-                return
+            # Wait for service response (main executor handles the callback)
+            while not future.done():
+                time.sleep(0.1)
             self.get_logger().info("Planning service returned")
             response = future.result()
             if response.is_solved:
@@ -405,7 +407,11 @@ if __name__ == '__main__':
         args = parse_args()
         rclpy.init()
         gp = main(args)
-        rclpy.spin(gp)
+        # Use MultiThreadedExecutor to handle concurrent callbacks
+        from rclpy.executors import MultiThreadedExecutor
+        executor = MultiThreadedExecutor()
+        executor.add_node(gp)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
