@@ -266,14 +266,10 @@ class GlobalPlanner(Node):
             request.plan_request = plan_request
             self.get_logger().info("Calling planning service...")
             future = self.get_global_plan_client.call_async(request)
-            # Use timeout to avoid deadlock - planning takes max 2 seconds + buffer
-            timeout_sec = 10.0
-            start = time.time()
-            while not future.done():
-                rclpy.spin_once(self, timeout_sec=0.1)
-                if time.time() - start > timeout_sec:
-                    self.get_logger().error("Planning service timed out")
-                    return
+            rclpy.spin_until_future_complete(self, future, timeout_sec=15.0)
+            if not future.done():
+                self.get_logger().error("Planning service timed out")
+                return
             self.get_logger().info("Planning service returned")
             response = future.result()
             if response.is_solved:
