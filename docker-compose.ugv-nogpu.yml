@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  pngnav-ugv:
+    build:
+      context: .
+      dockerfile: Dockerfile.ugv
+    container_name: pngnav-ugv-ros2
+    image: pngnav:ugv-ros2-humble
+
+    # Use host network for reliable ROS2 discovery
+    network_mode: host
+    privileged: true
+
+    environment:
+      # --- Display & UI ---
+      - DISPLAY=host.docker.internal:0.0
+      - QT_X11_NO_MITSHM=1
+
+      # --- ROS2 Settings ---
+      - TURTLEBOT3_MODEL=waffle_pi
+      - ROS_DOMAIN_ID=0
+      # Use default FastDDS (cyclonedds may not be available)
+      # - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - ROS_LOCALHOST_ONLY=0
+
+    volumes:
+      # Mount the project directory so code changes reflect immediately
+      - ./:/workspace/PNGNav
+      # X11 Unix socket
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # NOTE: Removed conda-env volume - it was overwriting the built environment
+
+    # Increase shared memory size
+    shm_size: '2gb'
+
+    stdin_open: true
+    tty: true
+
+    command: /bin/bash

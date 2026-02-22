@@ -1,0 +1,168 @@
+# Dockerfile for PNGNav ROS2 Gazebo Simulation
+# Based on UGV RPI ROS2 Humble image
+
+FROM dudulrx0601/ugv_rpi_ros_humble:ugv_rpi_ros_humble
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TURTLEBOT3_MODEL=waffle_pi
+ENV ROS_DOMAIN_ID=0
+
+# Fix expired ROS GPG key
+RUN apt-get update && apt-get install -y curl gnupg2 && \
+    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    # Build tools
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    vim \
+    nano \
+    # Python dependencies
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    python3-numpy \
+    # ROS2 Navigation dependencies (install what's available)
+    ros-humble-nav2-bringup \
+    ros-humble-nav2-map-server \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-tools \
+    ros-humble-tf-transformations \
+    ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-navigation2 \
+    ros-humble-slam-toolbox \
+    # Python tf_transformations (critical for this package)
+    python3-transforms3d \
+    # Additional utilities
+    x11-apps \
+    xterm \
+    # Cleanup
+    && rm -rf /var/lib/apt/lists/* \
+    || true
+
+# Try to install TurtleBot3 packages (may not be available on all architectures)
+RUN apt-get update && apt-get install -y \
+    ros-humble-turtlebot3* \
+    ros-humble-turtlebot3-gazebo \
+    ros-humble-turtlebot3-navigation2 \
+    gazebo \
+    libgazebo-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    || echo "Some TurtleBot3/Gazebo packages may not be available for this architecture"
+
+# Install Python packages needed for ROS2 message generation (system Python)
+# These MUST be in system Python for colcon build to work
+RUN pip3 install --no-cache-dir lark empy==3.3.4 catkin_pkg numpy setuptools
+
+# Install Miniconda
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh -O /tmp/miniconda.sh || \
+    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh && \
+    bash /tmp/miniconda.sh -b -p /opt/conda && \
+    rm /tmp/miniconda.sh && \
+    /opt/conda/bin/conda clean -ya
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy environment file if exists
+COPY environment.yml /workspace/environment.yml
+
+# Initialize conda for bash
+RUN /opt/conda/bin/conda init bash
+
+# Accept Conda Terms of Service for required channels
+RUN /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
+# Create a minimal conda environment with Python 3.10 to match ROS2 Humble
+RUN /opt/conda/bin/conda create -n pngenv python=3.10 pip setuptools wheel -y
+
+# Install essential pip packages in conda environment
+RUN /opt/conda/envs/pngenv/bin/pip install --no-cache-dir \
+    numpy \
+    scipy \
+    matplotlib \
+    opencv-python-headless \
+    pillow \
+    pyyaml \
+    scikit-learn \
+    tqdm \
+    transforms3d \
+    pyquaternion \
+    lxml
+
+# Try to install Open3D (may fail on some architectures)
+RUN /opt/conda/envs/pngenv/bin/pip install --no-cache-dir open3d || echo "Open3D not available for this architecture"
+
+# Install PyTorch (architecture-appropriate version)
+# Try CPU version first (more compatible), fall back to default
+RUN /opt/conda/envs/pngenv/bin/pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu || \
+    /opt/conda/envs/pngenv/bin/pip install --no-cache-dir torch torchvision || \
+    echo "PyTorch installation failed - install manually"
+
+# Link ROS Python packages to conda environment so nodes can find them
+RUN ln -sf /opt/ros/humble/lib/python3.10/site-packages/tf_transformations \
+    /opt/conda/envs/pngenv/lib/python3.10/site-packages/tf_transformations 2>/dev/null || \
+    ln -sf /opt/ros/humble/local/lib/python3.10/dist-packages/tf_transformations \
+    /opt/conda/envs/pngenv/lib/python3.10/site-packages/tf_transformations 2>/dev/null || \
+    echo "tf_transformations will use local fallback"
+
+# Clean up conda
+RUN /opt/conda/bin/conda clean -ya || true
+
+# Copy the entire project
+COPY . /workspace/PNGNav
+
+# Set up workspace
+WORKDIR /workspace/PNGNav
+
+# Make scripts executable
+RUN find src/png_navigation/scripts -name "*.py" -exec chmod +x {} \; 2>/dev/null || true && \
+    find src/png_navigation/scripts_dynamic_obstacles -name "*.py" -exec chmod +x {} \; 2>/dev/null || true
+
+# Update shebang lines in scripts to use conda python
+RUN find src/png_navigation/scripts -name "*.py" -type f -exec sed -i '1s|^#!/.*|#!/opt/conda/envs/pngenv/bin/python|' {} \; 2>/dev/null || true && \
+    find src/png_navigation/scripts_dynamic_obstacles -name "*.py" -type f -exec sed -i '1s|^#!/.*|#!/opt/conda/envs/pngenv/bin/python|' {} \; 2>/dev/null || true
+
+# Build the ROS2 package (using system Python - NOT conda)
+# Ensure conda is NOT in PATH during build
+RUN export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin && \
+    . /opt/ros/humble/setup.sh && \
+    rm -rf build/ install/ log/ && \
+    colcon build --packages-select png_navigation || true
+
+# Setup bashrc for interactive use
+RUN echo "" >> ~/.bashrc && \
+    echo "# ROS2 setup" >> ~/.bashrc && \
+    echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc && \
+    echo "source /workspace/PNGNav/install/setup.bash 2>/dev/null || true" >> ~/.bashrc && \
+    echo "export TURTLEBOT3_MODEL=waffle_pi" >> ~/.bashrc && \
+    echo "" >> ~/.bashrc && \
+    echo "# Conda setup (adds conda to PATH)" >> ~/.bashrc && \
+    echo "export PATH=/opt/conda/bin:\$PATH" >> ~/.bashrc && \
+    echo "conda activate pngenv" >> ~/.bashrc
+
+# Create entrypoint script
+RUN printf '#!/bin/bash\n\
+set -e\n\
+source /opt/ros/humble/setup.bash\n\
+source /workspace/PNGNav/install/setup.bash 2>/dev/null || true\n\
+export TURTLEBOT3_MODEL=waffle_pi\n\
+export PATH=/opt/conda/bin:$PATH\n\
+eval "$(/opt/conda/bin/conda shell.bash hook)"\n\
+conda activate pngenv 2>/dev/null || true\n\
+cd /workspace/PNGNav\n\
+exec "$@"\n' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+# Set entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Default command
+CMD ["/bin/bash"]
